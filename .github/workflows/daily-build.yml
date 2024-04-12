@@ -1,0 +1,79 @@
+name: Daily Build
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: 0 19 * * 0,2,4
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Initialization environment
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          sudo ln -sf /usr/share/zoneinfo/Asia/Shanghai /etc/localtime
+
+      - name: Set Golang environment
+        uses: actions/setup-go@v5
+        with:
+          go-version: "stable"
+
+      - name: Clone sing-geosite source repository
+        env:
+          REPO_URL: https://github.com/SagerNet/sing-geosite
+          REPO_BRANCH: main
+        run: git clone -b $REPO_BRANCH $REPO_URL
+
+      - name: replace build scource code
+        run: |
+          cd sing-geosite
+          sed -i 's|dlc|geosite|g' main.go
+          sed -i 's|v2fly/domain-list-community|Loyalsoldier/v2ray-rules-dat|g' main.go
+          sed -i 's|sagernet/sing-geosite|alecthw/sing-geo|g' main.go
+          sed -i 's|destinationRelease.Name|destinationRelease.TagName|g' main.go
+          sed -i 's|sourceRelease.Name|sourceRelease.TagName|g' main.go
+
+      - name: Build geosite
+        id: build
+        run: |
+          cd sing-geosite
+          go run -v .
+
+      - name: Prepare publish geosite
+        if: steps.build.outputs.skip != 'true'
+        run: |
+          mv -f sing-geosite/rule-set geosite
+          mkdir -p publish
+          mv -f sing-geosite/geosite.db publish/
+          sha256sum publish/geosite.db > publish/geosite.db.sha256sum
+          mv -f sing-geosite/geosite-cn.db publish/
+          sha256sum publish/geosite-cn.db > publish/geosite-cn.db.sha256sum
+
+      - name: Push to geosite release branch
+        if: steps.build.outputs.skip != 'true'
+        run: |
+          cd geosite
+          git init
+          git config --local user.name "${{ github.actor }}"
+          git config --local user.email "${{ github.actor }}@users.noreply.github.com"
+          git checkout -b geosite
+          git add .
+          git commit -m "${{ steps.build.outputs.tag }}"
+          git remote add origin "https://${{ github.actor }}:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}"
+          git push -f -u origin geosite
+
+      - name: Release and upload
+        if: steps.build.outputs.skip != 'true'
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ steps.build.outputs.tag }}
+          draft: false
+          prerelease: false
+          files: |
+            publish/geosite.db
+            publish/geosite.db.sha256sum
+            publish/geosite-cn.db
+            publish/geosite-cn.db.sha256sum
